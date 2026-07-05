@@ -1,0 +1,4 @@
+{
+    "linux-amd64": { "friendlyName": "linux-amd64" },
+    "linux-arm64": { "friendlyName": "linux-arm64" }
+}
