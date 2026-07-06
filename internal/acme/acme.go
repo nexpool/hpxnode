@@ -25,11 +25,16 @@ type Client struct {
 	HTTPPort  string
 	Email     string
 	ReloadCmd string
+	// Server is the ACME CA: "letsencrypt" (default), "zerossl", "buypass",
+	// "google", or a full directory URL. Passed explicitly on every issue so the
+	// node never depends on acme.sh's persisted default CA (which is ZeroSSL and
+	// requires prior email registration).
+	Server string
 }
 
 // NewFromParams builds a Client from explicit values, auto-detecting acme.sh
 // when bin is empty.
-func NewFromParams(bin, certDir, httpPort, email, reloadCmd string) *Client {
+func NewFromParams(bin, certDir, httpPort, email, reloadCmd, server string) *Client {
 	if bin == "" {
 		for _, cand := range []string{"/root/.acme.sh/acme.sh", os.Getenv("HOME") + "/.acme.sh/acme.sh"} {
 			if fi, err := os.Stat(cand); err == nil && !fi.IsDir() {
@@ -38,7 +43,10 @@ func NewFromParams(bin, certDir, httpPort, email, reloadCmd string) *Client {
 			}
 		}
 	}
-	return &Client{Bin: bin, CertDir: certDir, HTTPPort: httpPort, Email: email, ReloadCmd: reloadCmd}
+	if server == "" {
+		server = "letsencrypt"
+	}
+	return &Client{Bin: bin, CertDir: certDir, HTTPPort: httpPort, Email: email, ReloadCmd: reloadCmd, Server: server}
 }
 
 // Available reports whether acme.sh was found.
@@ -62,7 +70,11 @@ func (c *Client) Issue(ctx context.Context, domains []string) error {
 	}
 	primary := domains[0]
 
-	args := []string{"--issue", "--standalone", "--httpport", c.HTTPPort}
+	server := c.Server
+	if server == "" {
+		server = "letsencrypt"
+	}
+	args := []string{"--issue", "--server", server, "--standalone", "--httpport", c.HTTPPort}
 	for _, d := range domains {
 		args = append(args, "-d", d)
 	}

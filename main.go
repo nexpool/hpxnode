@@ -78,7 +78,7 @@ func main() {
 	reload := env("RELOAD_CMD", "systemctl reload haproxy")
 	acmePort := env("ACME_HTTP_PORT", "8080")
 	hp := haproxy.NewFromParams(env("HAPROXY_BIN", "haproxy"), env("HAPROXY_CFG", "/etc/haproxy/haproxy.cfg"), certDir, acmePort, reload)
-	ac := acme.NewFromParams(env("ACME_SH", ""), certDir, acmePort, "", reload)
+	ac := acme.NewFromParams(env("ACME_SH", ""), certDir, acmePort, "", reload, env("ACME_SERVER", "letsencrypt"))
 
 	conn, err := grpc.NewClient(*panelAddr,
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
