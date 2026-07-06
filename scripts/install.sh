@@ -141,6 +141,9 @@ cat > /usr/bin/hpxnode <<'CLI'
 #!/usr/bin/env bash
 set -euo pipefail
 [[ $EUID -ne 0 ]] && echo "请用 root 运行" && exit 1
+REPO="${HPXNODE_REPO:-nexpool/hpxnode}"
+BIN=/usr/local/hpxnode/hpxnode
+arch(){ case "$(uname -m)" in x86_64|amd64) echo amd64;; aarch64|arm64) echo arm64;; *) echo amd64;; esac; }
 case "${1:-}" in
   start)   systemctl start hpxnode ;;
   stop)    systemctl stop hpxnode ;;
@@ -148,11 +151,20 @@ case "${1:-}" in
   status)  systemctl status hpxnode --no-pager ;;
   log)     journalctl -u hpxnode -f ;;
   config)  ${EDITOR:-vi} /etc/hpxnode/hpxnode.env; systemctl restart hpxnode ;;
+  update)
+    v=$(curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest" | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/' || true)
+    [[ -z "$v" ]] && echo "获取版本失败(检查网络，或仓库是否已发布 release)" && exit 1
+    echo "下载 hpxnode $v ($(arch)) ..."
+    # 下到临时文件再原子替换:不能直接覆盖正在运行的二进制(Text file busy)。
+    curl -fSL "https://github.com/${REPO}/releases/download/${v}/hpxnode-linux-$(arch)" -o "${BIN}.new" \
+      || { echo "下载失败"; rm -f "${BIN}.new"; exit 1; }
+    chmod +x "${BIN}.new"; mv -f "${BIN}.new" "$BIN"
+    systemctl restart hpxnode; echo "已更新并重启 $v" ;;
   uninstall)
     systemctl disable --now hpxnode 2>/dev/null || true
     rm -f /etc/systemd/system/hpxnode.service /usr/bin/hpxnode /usr/local/hpxnode/hpxnode
     systemctl daemon-reload; echo "已卸载节点代理(HAProxy/证书保留)" ;;
-  *) echo "usage: hpxnode {start|stop|restart|status|log|config|uninstall}" ;;
+  *) echo "usage: hpxnode {start|stop|restart|status|log|config|update|uninstall}" ;;
 esac
 CLI
 chmod +x /usr/bin/hpxnode
@@ -171,4 +183,4 @@ fi
 echo
 say "节点接入完成 ✅  已连接面板 $PANEL (node $NODE_ID)"
 echo "  在面板「节点」页应能看到本节点上线。之后给它分配站点即可。"
-echo "  管理命令: hpxnode {start|stop|restart|status|log|config|uninstall}"
+echo "  管理命令: hpxnode {start|stop|restart|status|log|config|update|uninstall}"

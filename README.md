@@ -62,8 +62,10 @@ PANEL_GRPC=面板IP:9090 NODE_ID=1 NODE_SECRET=xxx ./hpxnode
 安装后：
 
 ```bash
-hpxnode {start|stop|restart|status|log|config|uninstall}
+hpxnode {start|stop|restart|status|log|config|update|uninstall}
 ```
+
+`hpxnode update` 会从 GitHub Release 拉取最新 `hpxnode-linux-<arch>`、原子替换二进制并重启服务。
 
 ## 目录
 
