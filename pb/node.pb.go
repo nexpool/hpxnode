@@ -166,6 +166,7 @@ type SyncReply struct {
 	ConfigRevision uint64                 `protobuf:"varint,1,opt,name=config_revision,json=configRevision,proto3" json:"config_revision,omitempty"`
 	AcmeEmail      string                 `protobuf:"bytes,2,opt,name=acme_email,json=acmeEmail,proto3" json:"acme_email,omitempty"`
 	Sites          []*SiteSpec            `protobuf:"bytes,3,rep,name=sites,proto3" json:"sites,omitempty"`
+	Firewall       *FirewallConfig        `protobuf:"bytes,4,opt,name=firewall,proto3" json:"firewall,omitempty"`
 	unknownFields  protoimpl.UnknownFields
 	sizeCache      protoimpl.SizeCache
 }
@@ -221,19 +222,209 @@ func (x *SyncReply) GetSites() []*SiteSpec {
 	return nil
 }
 
-type SiteSpec struct {
+func (x *SyncReply) GetFirewall() *FirewallConfig {
+	if x != nil {
+		return x.Firewall
+	}
+	return nil
+}
+
+// FirewallConfig is the node's desired inbound OS firewall (nftables). When
+// enabled the agent installs a default-deny input policy with these allow rules
+// (plus loopback + established/related). When disabled it removes its table.
+type FirewallConfig struct {
+	state   protoimpl.MessageState `protogen:"open.v1"`
+	Enabled bool                   `protobuf:"varint,1,opt,name=enabled,proto3" json:"enabled,omitempty"`
+	Rules   []*FirewallRule        `protobuf:"bytes,2,rep,name=rules,proto3" json:"rules,omitempty"`
+	// ipsets are the resolved named IP sets referenced by rules whose source is
+	// "@<name>" (e.g. auto-fetched Cloudflare ranges). The agent renders them as
+	// nftables named sets.
+	Ipsets        []*IPSet `protobuf:"bytes,3,rep,name=ipsets,proto3" json:"ipsets,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *FirewallConfig) Reset() {
+	*x = FirewallConfig{}
+	mi := &file_node_proto_msgTypes[4]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *FirewallConfig) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*FirewallConfig) ProtoMessage() {}
+
+func (x *FirewallConfig) ProtoReflect() protoreflect.Message {
+	mi := &file_node_proto_msgTypes[4]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use FirewallConfig.ProtoReflect.Descriptor instead.
+func (*FirewallConfig) Descriptor() ([]byte, []int) {
+	return file_node_proto_rawDescGZIP(), []int{4}
+}
+
+func (x *FirewallConfig) GetEnabled() bool {
+	if x != nil {
+		return x.Enabled
+	}
+	return false
+}
+
+func (x *FirewallConfig) GetRules() []*FirewallRule {
+	if x != nil {
+		return x.Rules
+	}
+	return nil
+}
+
+func (x *FirewallConfig) GetIpsets() []*IPSet {
+	if x != nil {
+		return x.Ipsets
+	}
+	return nil
+}
+
+type FirewallRule struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Domains       string                 `protobuf:"bytes,1,opt,name=domains,proto3" json:"domains,omitempty"`                         // comma-separated, first is the primary/cert name
-	Upstream      string                 `protobuf:"bytes,2,opt,name=upstream,proto3" json:"upstream,omitempty"`                       // host:port
-	HostMode      string                 `protobuf:"bytes,3,opt,name=host_mode,json=hostMode,proto3" json:"host_mode,omitempty"`       // "upstream" | "keep" | "custom"
-	HostHeader    string                 `protobuf:"bytes,4,opt,name=host_header,json=hostHeader,proto3" json:"host_header,omitempty"` // used when host_mode == "custom"
+	Port          string                 `protobuf:"bytes,1,opt,name=port,proto3" json:"port,omitempty"`         // "22", "8000-8010", or "any"
+	Protocol      string                 `protobuf:"bytes,2,opt,name=protocol,proto3" json:"protocol,omitempty"` // "tcp" | "udp" | "any"
+	Source        string                 `protobuf:"bytes,3,opt,name=source,proto3" json:"source,omitempty"`     // "any", a CIDR/IP, or "@<ipset-name>"
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *FirewallRule) Reset() {
+	*x = FirewallRule{}
+	mi := &file_node_proto_msgTypes[5]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *FirewallRule) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*FirewallRule) ProtoMessage() {}
+
+func (x *FirewallRule) ProtoReflect() protoreflect.Message {
+	mi := &file_node_proto_msgTypes[5]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use FirewallRule.ProtoReflect.Descriptor instead.
+func (*FirewallRule) Descriptor() ([]byte, []int) {
+	return file_node_proto_rawDescGZIP(), []int{5}
+}
+
+func (x *FirewallRule) GetPort() string {
+	if x != nil {
+		return x.Port
+	}
+	return ""
+}
+
+func (x *FirewallRule) GetProtocol() string {
+	if x != nil {
+		return x.Protocol
+	}
+	return ""
+}
+
+func (x *FirewallRule) GetSource() string {
+	if x != nil {
+		return x.Source
+	}
+	return ""
+}
+
+type IPSet struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`   // nft set name ([a-zA-Z0-9_])
+	Cidrs         []string               `protobuf:"bytes,2,rep,name=cidrs,proto3" json:"cidrs,omitempty"` // resolved IPv4/IPv6 CIDRs
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *IPSet) Reset() {
+	*x = IPSet{}
+	mi := &file_node_proto_msgTypes[6]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *IPSet) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*IPSet) ProtoMessage() {}
+
+func (x *IPSet) ProtoReflect() protoreflect.Message {
+	mi := &file_node_proto_msgTypes[6]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use IPSet.ProtoReflect.Descriptor instead.
+func (*IPSet) Descriptor() ([]byte, []int) {
+	return file_node_proto_rawDescGZIP(), []int{6}
+}
+
+func (x *IPSet) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *IPSet) GetCidrs() []string {
+	if x != nil {
+		return x.Cidrs
+	}
+	return nil
+}
+
+type SiteSpec struct {
+	state      protoimpl.MessageState `protogen:"open.v1"`
+	Domains    string                 `protobuf:"bytes,1,opt,name=domains,proto3" json:"domains,omitempty"`                         // comma-separated, first is the primary/cert name
+	Upstream   string                 `protobuf:"bytes,2,opt,name=upstream,proto3" json:"upstream,omitempty"`                       // host:port
+	HostMode   string                 `protobuf:"bytes,3,opt,name=host_mode,json=hostMode,proto3" json:"host_mode,omitempty"`       // "upstream" | "keep" | "custom"
+	HostHeader string                 `protobuf:"bytes,4,opt,name=host_header,json=hostHeader,proto3" json:"host_header,omitempty"` // used when host_mode == "custom"
+	// Node-group (CDN-style) fan-out fields. For a single-node site is_leader is
+	// true and the others are empty.
+	IsLeader      bool   `protobuf:"varint,5,opt,name=is_leader,json=isLeader,proto3" json:"is_leader,omitempty"`      // this node issues the cert for this site
+	AcmeLeader    string `protobuf:"bytes,6,opt,name=acme_leader,json=acmeLeader,proto3" json:"acme_leader,omitempty"` // followers: leader address to forward HTTP-01 to (host)
+	CertPem       string `protobuf:"bytes,7,opt,name=cert_pem,json=certPem,proto3" json:"cert_pem,omitempty"`          // followers: the leader-issued cert (fullchain+key) to install
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *SiteSpec) Reset() {
 	*x = SiteSpec{}
-	mi := &file_node_proto_msgTypes[4]
+	mi := &file_node_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -245,7 +436,7 @@ func (x *SiteSpec) String() string {
 func (*SiteSpec) ProtoMessage() {}
 
 func (x *SiteSpec) ProtoReflect() protoreflect.Message {
-	mi := &file_node_proto_msgTypes[4]
+	mi := &file_node_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -258,7 +449,7 @@ func (x *SiteSpec) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SiteSpec.ProtoReflect.Descriptor instead.
 func (*SiteSpec) Descriptor() ([]byte, []int) {
-	return file_node_proto_rawDescGZIP(), []int{4}
+	return file_node_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *SiteSpec) GetDomains() string {
@@ -289,19 +480,131 @@ func (x *SiteSpec) GetHostHeader() string {
 	return ""
 }
 
+func (x *SiteSpec) GetIsLeader() bool {
+	if x != nil {
+		return x.IsLeader
+	}
+	return false
+}
+
+func (x *SiteSpec) GetAcmeLeader() string {
+	if x != nil {
+		return x.AcmeLeader
+	}
+	return ""
+}
+
+func (x *SiteSpec) GetCertPem() string {
+	if x != nil {
+		return x.CertPem
+	}
+	return ""
+}
+
+// CertUpload carries a leader-issued certificate to the panel for distribution.
+type CertUpload struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Domain        string                 `protobuf:"bytes,1,opt,name=domain,proto3" json:"domain,omitempty"` // primary domain
+	Pem           string                 `protobuf:"bytes,2,opt,name=pem,proto3" json:"pem,omitempty"`       // fullchain + private key (PEM)
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CertUpload) Reset() {
+	*x = CertUpload{}
+	mi := &file_node_proto_msgTypes[8]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CertUpload) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CertUpload) ProtoMessage() {}
+
+func (x *CertUpload) ProtoReflect() protoreflect.Message {
+	mi := &file_node_proto_msgTypes[8]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CertUpload.ProtoReflect.Descriptor instead.
+func (*CertUpload) Descriptor() ([]byte, []int) {
+	return file_node_proto_rawDescGZIP(), []int{8}
+}
+
+func (x *CertUpload) GetDomain() string {
+	if x != nil {
+		return x.Domain
+	}
+	return ""
+}
+
+func (x *CertUpload) GetPem() string {
+	if x != nil {
+		return x.Pem
+	}
+	return ""
+}
+
+type CertUploadReply struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CertUploadReply) Reset() {
+	*x = CertUploadReply{}
+	mi := &file_node_proto_msgTypes[9]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CertUploadReply) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CertUploadReply) ProtoMessage() {}
+
+func (x *CertUploadReply) ProtoReflect() protoreflect.Message {
+	mi := &file_node_proto_msgTypes[9]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CertUploadReply.ProtoReflect.Descriptor instead.
+func (*CertUploadReply) Descriptor() ([]byte, []int) {
+	return file_node_proto_rawDescGZIP(), []int{9}
+}
+
 type StatusRequest struct {
 	state          protoimpl.MessageState `protogen:"open.v1"`
 	HaproxyRunning bool                   `protobuf:"varint,1,opt,name=haproxy_running,json=haproxyRunning,proto3" json:"haproxy_running,omitempty"`
 	ConfigOk       bool                   `protobuf:"varint,2,opt,name=config_ok,json=configOk,proto3" json:"config_ok,omitempty"`
 	ConfigErr      string                 `protobuf:"bytes,3,opt,name=config_err,json=configErr,proto3" json:"config_err,omitempty"`
 	Certs          []*CertStatus          `protobuf:"bytes,4,rep,name=certs,proto3" json:"certs,omitempty"`
+	FirewallOk     bool                   `protobuf:"varint,5,opt,name=firewall_ok,json=firewallOk,proto3" json:"firewall_ok,omitempty"` // firewall applied cleanly (or not managed)
+	FirewallErr    string                 `protobuf:"bytes,6,opt,name=firewall_err,json=firewallErr,proto3" json:"firewall_err,omitempty"`
 	unknownFields  protoimpl.UnknownFields
 	sizeCache      protoimpl.SizeCache
 }
 
 func (x *StatusRequest) Reset() {
 	*x = StatusRequest{}
-	mi := &file_node_proto_msgTypes[5]
+	mi := &file_node_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -313,7 +616,7 @@ func (x *StatusRequest) String() string {
 func (*StatusRequest) ProtoMessage() {}
 
 func (x *StatusRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_node_proto_msgTypes[5]
+	mi := &file_node_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -326,7 +629,7 @@ func (x *StatusRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StatusRequest.ProtoReflect.Descriptor instead.
 func (*StatusRequest) Descriptor() ([]byte, []int) {
-	return file_node_proto_rawDescGZIP(), []int{5}
+	return file_node_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *StatusRequest) GetHaproxyRunning() bool {
@@ -357,6 +660,20 @@ func (x *StatusRequest) GetCerts() []*CertStatus {
 	return nil
 }
 
+func (x *StatusRequest) GetFirewallOk() bool {
+	if x != nil {
+		return x.FirewallOk
+	}
+	return false
+}
+
+func (x *StatusRequest) GetFirewallErr() string {
+	if x != nil {
+		return x.FirewallErr
+	}
+	return ""
+}
+
 type CertStatus struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Domain        string                 `protobuf:"bytes,1,opt,name=domain,proto3" json:"domain,omitempty"`
@@ -369,7 +686,7 @@ type CertStatus struct {
 
 func (x *CertStatus) Reset() {
 	*x = CertStatus{}
-	mi := &file_node_proto_msgTypes[6]
+	mi := &file_node_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -381,7 +698,7 @@ func (x *CertStatus) String() string {
 func (*CertStatus) ProtoMessage() {}
 
 func (x *CertStatus) ProtoReflect() protoreflect.Message {
-	mi := &file_node_proto_msgTypes[6]
+	mi := &file_node_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -394,7 +711,7 @@ func (x *CertStatus) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CertStatus.ProtoReflect.Descriptor instead.
 func (*CertStatus) Descriptor() ([]byte, []int) {
-	return file_node_proto_rawDescGZIP(), []int{6}
+	return file_node_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *CertStatus) GetDomain() string {
@@ -433,7 +750,7 @@ type StatusReply struct {
 
 func (x *StatusReply) Reset() {
 	*x = StatusReply{}
-	mi := &file_node_proto_msgTypes[7]
+	mi := &file_node_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -445,7 +762,7 @@ func (x *StatusReply) String() string {
 func (*StatusReply) ProtoMessage() {}
 
 func (x *StatusReply) ProtoReflect() protoreflect.Message {
-	mi := &file_node_proto_msgTypes[7]
+	mi := &file_node_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -458,7 +775,7 @@ func (x *StatusReply) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StatusReply.ProtoReflect.Descriptor instead.
 func (*StatusReply) Descriptor() ([]byte, []int) {
-	return file_node_proto_rawDescGZIP(), []int{7}
+	return file_node_proto_rawDescGZIP(), []int{12}
 }
 
 var File_node_proto protoreflect.FileDescriptor
@@ -474,35 +791,61 @@ const file_node_proto_rawDesc = "" +
 	"\x0fhaproxy_version\x18\x03 \x01(\tR\x0ehaproxyVersion\"9\n" +
 	"\x0eHeartbeatReply\x12'\n" +
 	"\x0fconfig_revision\x18\x01 \x01(\x04R\x0econfigRevision\"\r\n" +
-	"\vSyncRequest\"\x7f\n" +
+	"\vSyncRequest\"\xb7\x01\n" +
 	"\tSyncReply\x12'\n" +
 	"\x0fconfig_revision\x18\x01 \x01(\x04R\x0econfigRevision\x12\x1d\n" +
 	"\n" +
 	"acme_email\x18\x02 \x01(\tR\tacmeEmail\x12*\n" +
-	"\x05sites\x18\x03 \x03(\v2\x14.hpxnode.v1.SiteSpecR\x05sites\"~\n" +
+	"\x05sites\x18\x03 \x03(\v2\x14.hpxnode.v1.SiteSpecR\x05sites\x126\n" +
+	"\bfirewall\x18\x04 \x01(\v2\x1a.hpxnode.v1.FirewallConfigR\bfirewall\"\x85\x01\n" +
+	"\x0eFirewallConfig\x12\x18\n" +
+	"\aenabled\x18\x01 \x01(\bR\aenabled\x12.\n" +
+	"\x05rules\x18\x02 \x03(\v2\x18.hpxnode.v1.FirewallRuleR\x05rules\x12)\n" +
+	"\x06ipsets\x18\x03 \x03(\v2\x11.hpxnode.v1.IPSetR\x06ipsets\"V\n" +
+	"\fFirewallRule\x12\x12\n" +
+	"\x04port\x18\x01 \x01(\tR\x04port\x12\x1a\n" +
+	"\bprotocol\x18\x02 \x01(\tR\bprotocol\x12\x16\n" +
+	"\x06source\x18\x03 \x01(\tR\x06source\"1\n" +
+	"\x05IPSet\x12\x12\n" +
+	"\x04name\x18\x01 \x01(\tR\x04name\x12\x14\n" +
+	"\x05cidrs\x18\x02 \x03(\tR\x05cidrs\"\xd7\x01\n" +
 	"\bSiteSpec\x12\x18\n" +
 	"\adomains\x18\x01 \x01(\tR\adomains\x12\x1a\n" +
 	"\bupstream\x18\x02 \x01(\tR\bupstream\x12\x1b\n" +
 	"\thost_mode\x18\x03 \x01(\tR\bhostMode\x12\x1f\n" +
 	"\vhost_header\x18\x04 \x01(\tR\n" +
-	"hostHeader\"\xa2\x01\n" +
+	"hostHeader\x12\x1b\n" +
+	"\tis_leader\x18\x05 \x01(\bR\bisLeader\x12\x1f\n" +
+	"\vacme_leader\x18\x06 \x01(\tR\n" +
+	"acmeLeader\x12\x19\n" +
+	"\bcert_pem\x18\a \x01(\tR\acertPem\"6\n" +
+	"\n" +
+	"CertUpload\x12\x16\n" +
+	"\x06domain\x18\x01 \x01(\tR\x06domain\x12\x10\n" +
+	"\x03pem\x18\x02 \x01(\tR\x03pem\"\x11\n" +
+	"\x0fCertUploadReply\"\xe6\x01\n" +
 	"\rStatusRequest\x12'\n" +
 	"\x0fhaproxy_running\x18\x01 \x01(\bR\x0ehaproxyRunning\x12\x1b\n" +
 	"\tconfig_ok\x18\x02 \x01(\bR\bconfigOk\x12\x1d\n" +
 	"\n" +
 	"config_err\x18\x03 \x01(\tR\tconfigErr\x12,\n" +
-	"\x05certs\x18\x04 \x03(\v2\x16.hpxnode.v1.CertStatusR\x05certs\"\x7f\n" +
+	"\x05certs\x18\x04 \x03(\v2\x16.hpxnode.v1.CertStatusR\x05certs\x12\x1f\n" +
+	"\vfirewall_ok\x18\x05 \x01(\bR\n" +
+	"firewallOk\x12!\n" +
+	"\ffirewall_err\x18\x06 \x01(\tR\vfirewallErr\"\x7f\n" +
 	"\n" +
 	"CertStatus\x12\x16\n" +
 	"\x06domain\x18\x01 \x01(\tR\x06domain\x12\x16\n" +
 	"\x06exists\x18\x02 \x01(\bR\x06exists\x12$\n" +
 	"\x0enot_after_unix\x18\x03 \x01(\x03R\fnotAfterUnix\x12\x1b\n" +
 	"\tdays_left\x18\x04 \x01(\x05R\bdaysLeft\"\r\n" +
-	"\vStatusReply2\xd0\x01\n" +
+	"\vStatusReply2\x93\x02\n" +
 	"\vNodeService\x12E\n" +
 	"\tHeartbeat\x12\x1c.hpxnode.v1.HeartbeatRequest\x1a\x1a.hpxnode.v1.HeartbeatReply\x126\n" +
 	"\x04Sync\x12\x17.hpxnode.v1.SyncRequest\x1a\x15.hpxnode.v1.SyncReply\x12B\n" +
-	"\fReportStatus\x12\x19.hpxnode.v1.StatusRequest\x1a\x17.hpxnode.v1.StatusReplyB\"Z github.com/nexpool/hpxnode/pb;pbb\x06proto3"
+	"\fReportStatus\x12\x19.hpxnode.v1.StatusRequest\x1a\x17.hpxnode.v1.StatusReply\x12A\n" +
+	"\n" +
+	"ReportCert\x12\x16.hpxnode.v1.CertUpload\x1a\x1b.hpxnode.v1.CertUploadReplyB\"Z github.com/nexpool/hpxnode/pb;pbb\x06proto3"
 
 var (
 	file_node_proto_rawDescOnce sync.Once
@@ -516,31 +859,41 @@ func file_node_proto_rawDescGZIP() []byte {
 	return file_node_proto_rawDescData
 }
 
-var file_node_proto_msgTypes = make([]protoimpl.MessageInfo, 8)
+var file_node_proto_msgTypes = make([]protoimpl.MessageInfo, 13)
 var file_node_proto_goTypes = []any{
 	(*HeartbeatRequest)(nil), // 0: hpxnode.v1.HeartbeatRequest
 	(*HeartbeatReply)(nil),   // 1: hpxnode.v1.HeartbeatReply
 	(*SyncRequest)(nil),      // 2: hpxnode.v1.SyncRequest
 	(*SyncReply)(nil),        // 3: hpxnode.v1.SyncReply
-	(*SiteSpec)(nil),         // 4: hpxnode.v1.SiteSpec
-	(*StatusRequest)(nil),    // 5: hpxnode.v1.StatusRequest
-	(*CertStatus)(nil),       // 6: hpxnode.v1.CertStatus
-	(*StatusReply)(nil),      // 7: hpxnode.v1.StatusReply
+	(*FirewallConfig)(nil),   // 4: hpxnode.v1.FirewallConfig
+	(*FirewallRule)(nil),     // 5: hpxnode.v1.FirewallRule
+	(*IPSet)(nil),            // 6: hpxnode.v1.IPSet
+	(*SiteSpec)(nil),         // 7: hpxnode.v1.SiteSpec
+	(*CertUpload)(nil),       // 8: hpxnode.v1.CertUpload
+	(*CertUploadReply)(nil),  // 9: hpxnode.v1.CertUploadReply
+	(*StatusRequest)(nil),    // 10: hpxnode.v1.StatusRequest
+	(*CertStatus)(nil),       // 11: hpxnode.v1.CertStatus
+	(*StatusReply)(nil),      // 12: hpxnode.v1.StatusReply
 }
 var file_node_proto_depIdxs = []int32{
-	4, // 0: hpxnode.v1.SyncReply.sites:type_name -> hpxnode.v1.SiteSpec
-	6, // 1: hpxnode.v1.StatusRequest.certs:type_name -> hpxnode.v1.CertStatus
-	0, // 2: hpxnode.v1.NodeService.Heartbeat:input_type -> hpxnode.v1.HeartbeatRequest
-	2, // 3: hpxnode.v1.NodeService.Sync:input_type -> hpxnode.v1.SyncRequest
-	5, // 4: hpxnode.v1.NodeService.ReportStatus:input_type -> hpxnode.v1.StatusRequest
-	1, // 5: hpxnode.v1.NodeService.Heartbeat:output_type -> hpxnode.v1.HeartbeatReply
-	3, // 6: hpxnode.v1.NodeService.Sync:output_type -> hpxnode.v1.SyncReply
-	7, // 7: hpxnode.v1.NodeService.ReportStatus:output_type -> hpxnode.v1.StatusReply
-	5, // [5:8] is the sub-list for method output_type
-	2, // [2:5] is the sub-list for method input_type
-	2, // [2:2] is the sub-list for extension type_name
-	2, // [2:2] is the sub-list for extension extendee
-	0, // [0:2] is the sub-list for field type_name
+	7,  // 0: hpxnode.v1.SyncReply.sites:type_name -> hpxnode.v1.SiteSpec
+	4,  // 1: hpxnode.v1.SyncReply.firewall:type_name -> hpxnode.v1.FirewallConfig
+	5,  // 2: hpxnode.v1.FirewallConfig.rules:type_name -> hpxnode.v1.FirewallRule
+	6,  // 3: hpxnode.v1.FirewallConfig.ipsets:type_name -> hpxnode.v1.IPSet
+	11, // 4: hpxnode.v1.StatusRequest.certs:type_name -> hpxnode.v1.CertStatus
+	0,  // 5: hpxnode.v1.NodeService.Heartbeat:input_type -> hpxnode.v1.HeartbeatRequest
+	2,  // 6: hpxnode.v1.NodeService.Sync:input_type -> hpxnode.v1.SyncRequest
+	10, // 7: hpxnode.v1.NodeService.ReportStatus:input_type -> hpxnode.v1.StatusRequest
+	8,  // 8: hpxnode.v1.NodeService.ReportCert:input_type -> hpxnode.v1.CertUpload
+	1,  // 9: hpxnode.v1.NodeService.Heartbeat:output_type -> hpxnode.v1.HeartbeatReply
+	3,  // 10: hpxnode.v1.NodeService.Sync:output_type -> hpxnode.v1.SyncReply
+	12, // 11: hpxnode.v1.NodeService.ReportStatus:output_type -> hpxnode.v1.StatusReply
+	9,  // 12: hpxnode.v1.NodeService.ReportCert:output_type -> hpxnode.v1.CertUploadReply
+	9,  // [9:13] is the sub-list for method output_type
+	5,  // [5:9] is the sub-list for method input_type
+	5,  // [5:5] is the sub-list for extension type_name
+	5,  // [5:5] is the sub-list for extension extendee
+	0,  // [0:5] is the sub-list for field type_name
 }
 
 func init() { file_node_proto_init() }
@@ -554,7 +907,7 @@ func file_node_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_node_proto_rawDesc), len(file_node_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   8,
+			NumMessages:   13,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

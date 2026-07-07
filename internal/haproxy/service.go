@@ -31,8 +31,9 @@ func NewFromParams(bin, cfgPath, certDir, acmePort, reloadCmd string) *Service {
 
 // Generate renders the full haproxy.cfg text for the given enabled sites.
 func (s *Service) Generate(sites []models.Site) string {
-	var fr, be strings.Builder
+	var fr, be, acmeFwd, acmeBe strings.Builder
 	idx := 0
+	leaderIdx := 0
 	for i := range sites {
 		site := sites[i]
 		if !site.Enabled {
@@ -46,6 +47,18 @@ func (s *Service) Generate(sites []models.Site) string {
 		name := fmt.Sprintf("be_%d", idx)
 		fr.WriteString(fmt.Sprintf("    acl host_%d hdr(host) -i %s\n", idx, strings.Join(domains, " ")))
 		fr.WriteString(fmt.Sprintf("    use_backend %s if host_%d\n", name, idx))
+
+		// Group followers forward this site's HTTP-01 challenges to the leader, so
+		// that whichever fan-out member Let's Encrypt happens to hit, the token
+		// (served by the leader's acme.sh) is reachable.
+		if site.Follower() && strings.TrimSpace(site.AcmeLeader) != "" {
+			leaderIdx++
+			lname := fmt.Sprintf("be_acme_leader_%d", leaderIdx)
+			acmeFwd.WriteString(fmt.Sprintf("    acl acme_host_%d hdr(host) -i %s\n", leaderIdx, strings.Join(domains, " ")))
+			acmeFwd.WriteString(fmt.Sprintf("    use_backend %s if is_acme acme_host_%d\n", lname, leaderIdx))
+			acmeBe.WriteString(fmt.Sprintf("backend %s\n", lname))
+			acmeBe.WriteString(fmt.Sprintf("    server leader %s:80\n\n", strings.TrimSpace(site.AcmeLeader)))
+		}
 
 		var hostLine string
 		switch site.HostMode {
@@ -83,18 +96,18 @@ frontend fe_http
     bind :80
     acl is_acme path_beg /.well-known/acme-challenge/
     http-request redirect scheme https code 301 unless is_acme
-    use_backend be_acme if is_acme
+%s    use_backend be_acme if is_acme
 
 frontend fe_https
     bind :443 ssl crt %s/
 %s    default_backend be_default
 
-%sbackend be_default
+%s%sbackend be_default
     http-request return status 404 content-type "text/plain" string "404 Not Found"
 
 backend be_acme
     server acmesh 127.0.0.1:%s
-`, s.CertDir, fr.String(), be.String(), s.ACMEPort)
+`, acmeFwd.String(), s.CertDir, fr.String(), be.String(), acmeBe.String(), s.ACMEPort)
 }
 
 // Validate writes cfg to a temp file and runs `haproxy -c`. It returns the

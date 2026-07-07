@@ -22,6 +22,7 @@ const (
 	NodeService_Heartbeat_FullMethodName    = "/hpxnode.v1.NodeService/Heartbeat"
 	NodeService_Sync_FullMethodName         = "/hpxnode.v1.NodeService/Sync"
 	NodeService_ReportStatus_FullMethodName = "/hpxnode.v1.NodeService/ReportStatus"
+	NodeService_ReportCert_FullMethodName   = "/hpxnode.v1.NodeService/ReportCert"
 )
 
 // NodeServiceClient is the client API for NodeService service.
@@ -38,6 +39,9 @@ type NodeServiceClient interface {
 	Sync(ctx context.Context, in *SyncRequest, opts ...grpc.CallOption) (*SyncReply, error)
 	// ReportStatus pushes the node's runtime status (HAProxy up, cert expiries).
 	ReportStatus(ctx context.Context, in *StatusRequest, opts ...grpc.CallOption) (*StatusReply, error)
+	// ReportCert uploads a certificate the node issued (used by a group's leader
+	// node so the panel can distribute it to the group's other nodes).
+	ReportCert(ctx context.Context, in *CertUpload, opts ...grpc.CallOption) (*CertUploadReply, error)
 }
 
 type nodeServiceClient struct {
@@ -78,6 +82,16 @@ func (c *nodeServiceClient) ReportStatus(ctx context.Context, in *StatusRequest,
 	return out, nil
 }
 
+func (c *nodeServiceClient) ReportCert(ctx context.Context, in *CertUpload, opts ...grpc.CallOption) (*CertUploadReply, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(CertUploadReply)
+	err := c.cc.Invoke(ctx, NodeService_ReportCert_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // NodeServiceServer is the server API for NodeService service.
 // All implementations must embed UnimplementedNodeServiceServer
 // for forward compatibility.
@@ -92,6 +106,9 @@ type NodeServiceServer interface {
 	Sync(context.Context, *SyncRequest) (*SyncReply, error)
 	// ReportStatus pushes the node's runtime status (HAProxy up, cert expiries).
 	ReportStatus(context.Context, *StatusRequest) (*StatusReply, error)
+	// ReportCert uploads a certificate the node issued (used by a group's leader
+	// node so the panel can distribute it to the group's other nodes).
+	ReportCert(context.Context, *CertUpload) (*CertUploadReply, error)
 	mustEmbedUnimplementedNodeServiceServer()
 }
 
@@ -110,6 +127,9 @@ func (UnimplementedNodeServiceServer) Sync(context.Context, *SyncRequest) (*Sync
 }
 func (UnimplementedNodeServiceServer) ReportStatus(context.Context, *StatusRequest) (*StatusReply, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method ReportStatus not implemented")
+}
+func (UnimplementedNodeServiceServer) ReportCert(context.Context, *CertUpload) (*CertUploadReply, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ReportCert not implemented")
 }
 func (UnimplementedNodeServiceServer) mustEmbedUnimplementedNodeServiceServer() {}
 func (UnimplementedNodeServiceServer) testEmbeddedByValue()                     {}
@@ -186,6 +206,24 @@ func _NodeService_ReportStatus_Handler(srv interface{}, ctx context.Context, dec
 	return interceptor(ctx, in, info, handler)
 }
 
+func _NodeService_ReportCert_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CertUpload)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(NodeServiceServer).ReportCert(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: NodeService_ReportCert_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(NodeServiceServer).ReportCert(ctx, req.(*CertUpload))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // NodeService_ServiceDesc is the grpc.ServiceDesc for NodeService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -204,6 +242,10 @@ var NodeService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ReportStatus",
 			Handler:    _NodeService_ReportStatus_Handler,
+		},
+		{
+			MethodName: "ReportCert",
+			Handler:    _NodeService_ReportCert_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

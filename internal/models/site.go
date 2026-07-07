@@ -16,7 +16,19 @@ type Site struct {
 	HostMode   string // upstream|keep|custom
 	HostHeader string // used when HostMode == custom
 	Enabled    bool
+
+	// Node-group (CDN-style) fan-out fields.
+	//   IsLeader true  -> this node issues the cert (single-node or group leader).
+	//   IsLeader false -> group follower: don't issue; install CertPEM and forward
+	//                     HTTP-01 challenges for these domains to AcmeLeader:80.
+	IsLeader   bool
+	AcmeLeader string // leader host to forward acme-challenge to (followers only)
+	CertPEM    string // leader-issued cert (fullchain+key) to install (followers only)
 }
+
+// Follower reports whether this node only serves the site (its cert was issued
+// elsewhere in the group and distributed here).
+func (s *Site) Follower() bool { return !s.IsLeader }
 
 // DomainList splits Domains into a trimmed, non-empty slice.
 func (s *Site) DomainList() []string {

@@ -59,15 +59,37 @@ say "[1/6] 安装 HAProxy ${HAPROXY_BRANCH}.x + acme.sh + 依赖"
 if command -v apt-get >/dev/null 2>&1; then
   export DEBIAN_FRONTEND=noninteractive
   apt-get update -y
-  apt-get install -y curl socat openssl ca-certificates gnupg software-properties-common cron
+  apt-get install -y curl socat openssl ca-certificates gnupg software-properties-common cron nftables
+  # HAProxy from Vincent Bernat's PPA. Not every branch is built for every Ubuntu
+  # series (3.1/3.2 are noble-only; jammy/focal top out at 3.0), so probe and pick
+  # the newest branch that actually has a Release for this series.
   if grep -qi ubuntu /etc/os-release 2>/dev/null && command -v add-apt-repository >/dev/null 2>&1; then
-    add-apt-repository -y "ppa:vbernat/haproxy-${HAPROXY_BRANCH}" && apt-get update -y || warn "PPA 添加失败，用自带版本"
+    codename="$( . /etc/os-release; echo "${VERSION_CODENAME:-}" )"
+    rm -f /etc/apt/sources.list.d/*vbernat*haproxy* 2>/dev/null || true   # clean any broken leftover
+    picked=""
+    for br in "$HAPROXY_BRANCH" 3.2 3.1 3.0 2.8; do
+      [[ -n "$br" ]] || continue
+      if curl -fs -o /dev/null --max-time 10 "https://ppa.launchpadcontent.net/vbernat/haproxy-${br}/ubuntu/dists/${codename}/Release"; then
+        picked="$br"; break
+      fi
+    done
+    if [[ -n "$picked" ]]; then
+      add-apt-repository -y "ppa:vbernat/haproxy-${picked}" && apt-get update -y || picked=""
+    fi
+    if [[ -n "$picked" && "$picked" != "$HAPROXY_BRANCH" ]]; then
+      warn "HAProxy ${HAPROXY_BRANCH} 在 ${codename} 无 PPA，改用可用的最新版 ${picked}"
+    fi
+    if [[ -z "$picked" ]]; then
+      rm -f /etc/apt/sources.list.d/*vbernat*haproxy* 2>/dev/null || true
+      apt-get update -y || true
+      warn "vbernat PPA 无适配 ${codename} 的 HAProxy，用发行版自带版本"
+    fi
   fi
   apt-get install -y --allow-downgrades haproxy
 elif command -v dnf >/dev/null 2>&1; then
-  dnf install -y haproxy socat curl openssl cronie
+  dnf install -y haproxy socat curl openssl cronie nftables
 elif command -v yum >/dev/null 2>&1; then
-  yum install -y epel-release || true; yum install -y haproxy socat curl openssl cronie
+  yum install -y epel-release || true; yum install -y haproxy socat curl openssl cronie nftables
 else
   die "未识别的包管理器"
 fi

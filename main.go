@@ -19,6 +19,7 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
@@ -29,6 +30,7 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 
 	"github.com/nexpool/hpxnode/internal/acme"
+	"github.com/nexpool/hpxnode/internal/firewall"
 	"github.com/nexpool/hpxnode/internal/haproxy"
 	"github.com/nexpool/hpxnode/internal/models"
 	pb "github.com/nexpool/hpxnode/pb"
@@ -59,6 +61,8 @@ type agent struct {
 	revKnown  bool
 	revision  uint64
 	lastSites []models.Site
+	fwErr     string            // last firewall apply error ("" = ok)
+	reported  map[string]string // domain -> last-uploaded cert PEM (leader)
 }
 
 func main() {
@@ -89,7 +93,7 @@ func main() {
 	}
 	defer conn.Close()
 
-	a := &agent{cli: pb.NewNodeServiceClient(conn), hp: hp, ac: ac, certDir: certDir}
+	a := &agent{cli: pb.NewNodeServiceClient(conn), hp: hp, ac: ac, certDir: certDir, reported: map[string]string{}}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -155,8 +159,15 @@ func (a *agent) sync(ctx context.Context) {
 			HostMode:   s.GetHostMode(),
 			HostHeader: s.GetHostHeader(),
 			Enabled:    true,
+			IsLeader:   s.GetIsLeader(),
+			AcmeLeader: s.GetAcmeLeader(),
+			CertPEM:    s.GetCertPem(),
 		})
 	}
+
+	// Install any leader-issued certs distributed to this node (group followers)
+	// before rendering, so the :443 bind can load them immediately.
+	a.installFollowerCerts(sites)
 
 	if err := a.hp.Apply(sites); err != nil {
 		log.Printf("apply config: %v", err)
@@ -167,9 +178,34 @@ func (a *agent) sync(ctx context.Context) {
 	a.lastSites = sites
 	log.Printf("synced revision %d (%d site(s))", a.revision, len(sites))
 
-	// Issue certificates for sites that don't have one yet. Renewals are handled
-	// by acme.sh's own cron.
+	// Apply the node's inbound firewall (independent of HAProxy). A nil firewall
+	// (old panel) means "not managed" -> Apply removes our table if present.
+	fw := reply.GetFirewall()
+	var fwRules []firewall.Rule
+	for _, r := range fw.GetRules() {
+		fwRules = append(fwRules, firewall.Rule{Port: r.GetPort(), Protocol: r.GetProtocol(), Source: r.GetSource()})
+	}
+	var fwSets []firewall.IPSet
+	for _, s := range fw.GetIpsets() {
+		fwSets = append(fwSets, firewall.IPSet{Name: s.GetName(), CIDRs: s.GetCidrs()})
+	}
+	if err := firewall.Apply(fw.GetEnabled(), fwRules, fwSets); err != nil {
+		a.fwErr = err.Error()
+		log.Printf("firewall: %v", err)
+	} else {
+		a.fwErr = ""
+		if fw.GetEnabled() {
+			log.Printf("firewall applied (%d rule(s))", len(fwRules))
+		}
+	}
+
+	// Issue certificates for sites that don't have one yet. Group followers never
+	// issue — their cert is signed by the leader and distributed by the panel.
+	// Renewals are handled by acme.sh's own cron (leader) + redistribution.
 	for i := range sites {
+		if sites[i].Follower() {
+			continue
+		}
 		primary := sites[i].Primary()
 		if info := acme.CertInfo(a.certDir, primary); info.Exists {
 			continue
@@ -182,7 +218,90 @@ func (a *agent) sync(ctx context.Context) {
 		}
 		cancel()
 	}
+	// Upload any freshly-issued leader certs so the panel can distribute them.
+	a.pushCerts(ctx, sites)
 	a.report(ctx)
+}
+
+// installFollowerCerts writes leader-issued certificates (distributed by the
+// panel) to the local cert dir for group-follower sites, so HAProxy serves them.
+func (a *agent) installFollowerCerts(sites []models.Site) {
+	for i := range sites {
+		st := &sites[i]
+		if !st.Follower() || strings.TrimSpace(st.CertPEM) == "" {
+			continue
+		}
+		primary := st.Primary()
+		if primary == "" {
+			continue
+		}
+		path := filepath.Join(a.certDir, primary+".pem")
+		if cur, err := os.ReadFile(path); err == nil && string(cur) == st.CertPEM {
+			continue // unchanged
+		}
+		if err := os.MkdirAll(a.certDir, 0o755); err != nil {
+			log.Printf("cert dir %s: %v", a.certDir, err)
+			continue
+		}
+		if err := writeFileAtomic(path, []byte(st.CertPEM), 0o600); err != nil {
+			log.Printf("install cert %s: %v", primary, err)
+			continue
+		}
+		log.Printf("installed distributed cert for %s", primary)
+	}
+}
+
+// pushCerts uploads leader-held certificates to the panel when they change, so
+// the panel can distribute them to the group's other members (covers first issue
+// and acme.sh cron renewals).
+func (a *agent) pushCerts(ctx context.Context, sites []models.Site) {
+	for i := range sites {
+		st := &sites[i]
+		if st.Follower() { // only leaders/single nodes hold an issued cert here
+			continue
+		}
+		primary := st.Primary()
+		if primary == "" {
+			continue
+		}
+		raw, err := os.ReadFile(filepath.Join(a.certDir, primary+".pem"))
+		if err != nil {
+			continue // not issued yet
+		}
+		pem := string(raw)
+		if a.reported[primary] == pem {
+			continue // already uploaded this exact cert
+		}
+		rctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+		_, err = a.cli.ReportCert(rctx, &pb.CertUpload{Domain: primary, Pem: pem})
+		cancel()
+		if err != nil {
+			log.Printf("report cert %s: %v", primary, err)
+			continue
+		}
+		a.reported[primary] = pem
+	}
+}
+
+// writeFileAtomic writes data to path via a temp file + rename in the same dir.
+func writeFileAtomic(path string, data []byte, mode os.FileMode) error {
+	dir := filepath.Dir(path)
+	tmp, err := os.CreateTemp(dir, ".cert-*")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		os.Remove(tmpName)
+		return err
+	}
+	tmp.Close()
+	if err := os.Chmod(tmpName, mode); err != nil {
+		os.Remove(tmpName)
+		return err
+	}
+	return os.Rename(tmpName, path)
 }
 
 // report sends HAProxy status + per-site cert expiries to the panel.
@@ -201,6 +320,9 @@ func (a *agent) report(ctx context.Context) {
 		req.ConfigOk = true
 	}
 
+	req.FirewallOk = a.fwErr == ""
+	req.FirewallErr = a.fwErr
+
 	for i := range a.lastSites {
 		primary := a.lastSites[i].Primary()
 		info := acme.CertInfo(a.certDir, primary)
@@ -216,6 +338,10 @@ func (a *agent) report(ctx context.Context) {
 	if _, err := a.cli.ReportStatus(rctx, req); err != nil {
 		log.Printf("report: %v", err)
 	}
+
+	// Re-upload leader certs that acme.sh's cron may have renewed, so followers
+	// pick up the renewed cert on their next sync.
+	a.pushCerts(ctx, a.lastSites)
 }
 
 func atoiDef(s string, def int) int {
