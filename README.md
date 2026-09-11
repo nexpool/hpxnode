@@ -1,7 +1,7 @@
 # hpxnode
 
 **hzproxy** 的节点代理。运行在每台 HAProxy 服务器上，通过 gRPC 连接
-[hzproxy](https://github.com/nexpool/hzproxy) 面板，拉取本节点的站点，
+[hzproxy](https://github.com/nexpool/hproxy) 面板，拉取本节点的站点，
 本地生成 `haproxy.cfg`、用 acme.sh 签发/续期 Let's Encrypt 证书、reload，并上报状态。
 
 ```
@@ -44,19 +44,19 @@ PANEL_GRPC=面板IP:9099 NODE_ID=1 NODE_SECRET=xxx ./hpxnode
 
 ## 配置（flag 或环境变量）
 
-| 环境变量 | flag | 默认 | 说明 |
-|---|---|---|---|
-| `PANEL_GRPC` | `--panel` | — | 面板 gRPC 地址 host:port（必填） |
-| `NODE_ID` | `--id` | — | 节点 ID（必填） |
-| `NODE_SECRET` | `--secret` | — | 节点密钥（必填） |
-| `HAPROXY_BIN` | | `haproxy` | HAProxy 二进制 |
-| `HAPROXY_CFG` | | `/etc/haproxy/haproxy.cfg` | 目标配置文件 |
-| `CERT_DIR` | | `/etc/haproxy/certs` | 证书目录（按 SNI 加载） |
-| `RELOAD_CMD` | | `systemctl reload haproxy` | reload 命令 |
-| `ACME_HTTP_PORT` | | `8080` | acme.sh standalone 本地端口 |
-| `HEARTBEAT_SECONDS` | | `10` | 心跳间隔 |
-| `STATUS_SECONDS` | | `30` | 状态上报间隔 |
-| `FIREWALL_FORWARD` | | `1` | 防火墙规则是否也约束**转发**流量（Docker 发布端口经 DNAT 走 forward 链，input 链看不到）。`0` = 只管 input，Docker 端口不受规则约束 |
+| 环境变量            | flag       | 默认                       | 说明                                                                                                                                |
+| ------------------- | ---------- | -------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| `PANEL_GRPC`        | `--panel`  | —                          | 面板 gRPC 地址 host:port（必填）                                                                                                    |
+| `NODE_ID`           | `--id`     | —                          | 节点 ID（必填）                                                                                                                     |
+| `NODE_SECRET`       | `--secret` | —                          | 节点密钥（必填）                                                                                                                    |
+| `HAPROXY_BIN`       |            | `haproxy`                  | HAProxy 二进制                                                                                                                      |
+| `HAPROXY_CFG`       |            | `/etc/haproxy/haproxy.cfg` | 目标配置文件                                                                                                                        |
+| `CERT_DIR`          |            | `/etc/haproxy/certs`       | 证书目录（按 SNI 加载）                                                                                                             |
+| `RELOAD_CMD`        |            | `systemctl reload haproxy` | reload 命令                                                                                                                         |
+| `ACME_HTTP_PORT`    |            | `8080`                     | acme.sh standalone 本地端口                                                                                                         |
+| `HEARTBEAT_SECONDS` |            | `10`                       | 心跳间隔                                                                                                                            |
+| `STATUS_SECONDS`    |            | `30`                       | 状态上报间隔                                                                                                                        |
+| `FIREWALL_FORWARD`  |            | `1`                        | 防火墙规则是否也约束**转发**流量（Docker 发布端口经 DNAT 走 forward 链，input 链看不到）。`0` = 只管 input，Docker 端口不受规则约束 |
 
 ## 管理命令
 
