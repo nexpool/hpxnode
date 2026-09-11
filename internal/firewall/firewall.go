@@ -14,6 +14,12 @@
 // enforced on a forward chain that runs before Docker's own rules (priority -10
 // vs Docker's 0) and only ever drops: its policy stays accept, so it can never
 // break unrelated forwarding.
+//
+// The forward hook sees the *translated* packet, so the port test there uses the
+// conntrack original destination port ("ct original proto-dst") — i.e. the
+// published host port the client actually connected to — instead of the
+// post-DNAT container port, which only matches when "docker run -p P:P" maps
+// identical ports.
 package firewall
 
 import (
@@ -74,6 +80,37 @@ func Apply(enabled bool, rules []Rule, sets []IPSet, opts Options) error {
 		return fmt.Errorf("nft 应用失败: %s", firstLine(out))
 	}
 	return nil
+}
+
+// Stats summarizes what a desired state renders (for logging/diagnostics).
+type Stats struct {
+	Accepts      int // input-chain accept rules
+	ForwardDrops int // forward-chain drop rules (0 when Forward is off)
+}
+
+// Summarize counts the rules a desired state renders. It makes no claim about
+// the live ruleset; it only mirrors what Apply would write.
+func Summarize(rules []Rule, sets []IPSet, opts Options) Stats {
+	idx := make(map[string]setInfo, len(sets))
+	for _, s := range sets {
+		info := setInfo{}
+		for _, c := range s.CIDRs {
+			if strings.Contains(c, ":") {
+				info.v6 = true
+			} else {
+				info.v4 = true
+			}
+		}
+		idx[s.Name] = info
+	}
+	var st Stats
+	for _, r := range rules {
+		st.Accepts += len(ruleLines(r, idx))
+	}
+	if opts.Forward {
+		st.ForwardDrops = len(forwardLines(rules, idx))
+	}
+	return st
 }
 
 // setInfo tracks which families a named set has elements for.
@@ -275,7 +312,7 @@ func forwardLines(rules []Rule, idx map[string]setInfo) []string {
 		if a.any {
 			continue // unrestricted sources: nothing to enforce on the forward path
 		}
-		pp := portProto(k.port, k.proto)
+		pp := forwardPortMatch(k.port, k.proto)
 		switch {
 		case len(a.v4) == 0 && len(a.v6) == 0:
 			// Every referenced set was missing/empty: mirror the input chain and
@@ -296,6 +333,40 @@ func forwardLines(rules []Rule, idx map[string]setInfo) []string {
 		}
 	}
 	return out
+}
+
+// forwardPortMatch renders the port test used on the forward hook. The forward
+// hook sees the translated (post-DNAT) packet, so "tcp dport <published port>"
+// only works when the container port equals the published port; the conntrack
+// original destination port is the port the client connected to (the published
+// host port) in every case — including Docker's DNAT.
+func forwardPortMatch(port, proto string) string {
+	pp := "ct original proto-dst " + port
+	if lo, hi, ok := splitPortRange(port); ok {
+		// Ranges are spelled as two comparisons: unambiguous on ct keys.
+		pp = "ct original proto-dst >= " + lo + " ct original proto-dst <= " + hi
+	}
+	switch proto {
+	case "udp":
+		return "meta l4proto udp " + pp
+	case "any":
+		return "meta l4proto { tcp, udp } " + pp
+	default: // tcp
+		return "meta l4proto tcp " + pp
+	}
+}
+
+// splitPortRange splits "8000-8010" into its bounds.
+func splitPortRange(port string) (string, string, bool) {
+	if !strings.Contains(port, "-") {
+		return "", "", false
+	}
+	parts := strings.SplitN(port, "-", 2)
+	lo, hi := strings.TrimSpace(parts[0]), strings.TrimSpace(parts[1])
+	if lo == "" || hi == "" {
+		return "", "", false
+	}
+	return lo, hi, true
 }
 
 // negated renders "ip saddr != a ip saddr != b" — i.e. drop the packet unless

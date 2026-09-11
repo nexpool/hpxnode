@@ -264,7 +264,11 @@ func (a *agent) applyFirewall(enabled bool, rules []firewall.Rule, sets []firewa
 	a.fwErr = ""
 	a.fwNote = ""
 	if enabled {
-		log.Printf("firewall applied (%d rule(s), forward=%v)", len(rules), a.fwForward)
+		st := firewall.Summarize(rules, sets, firewall.Options{Forward: a.fwForward})
+		log.Printf("firewall applied (%d accept(s), %d forward drop(s), forward=%v)", st.Accepts, st.ForwardDrops, a.fwForward)
+		if a.fwForward && st.ForwardDrops == 0 && len(rules) > 0 {
+			log.Printf("firewall: 没有生成 forward 规则（规则端口/来源为 any），Docker 发布端口不受约束")
+		}
 		if !a.fwForward {
 			// Without the forward chain, DNAT'ed (Docker-published) ports are not
 			// covered — say so instead of reporting a clean status.
