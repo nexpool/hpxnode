@@ -23,6 +23,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"syscall"
@@ -67,6 +68,13 @@ type agent struct {
 	fwNote    string            // non-fatal firewall note (e.g. Docker-published ports)
 	fwForward bool              // also enforce the rules on forwarded (DNAT/Docker) traffic
 	reported  map[string]string // domain -> last-uploaded cert PEM (leader)
+
+	// Last applied firewall state, so a change in the locally published Docker
+	// ports can be re-applied without waiting for a panel revision bump.
+	fwEnabled bool
+	fwRules   []firewall.Rule
+	fwSets    []firewall.IPSet
+	fwPubs    string
 }
 
 func main() {
@@ -255,7 +263,12 @@ func (a *agent) applyFirewall(enabled bool, rules []firewall.Rule, sets []firewa
 		}
 	}
 
-	if err := firewall.Apply(enabled, rules, sets, firewall.Options{Forward: a.fwForward}); err != nil {
+	// Docker-published ports are DNAT'ed, so their rules live in the forward
+	// chain. Look them up here (cheap, and only when forward enforcement is on).
+	pubs, pubsErr := firewall.DockerPublished()
+	opts := firewall.Options{Forward: a.fwForward, Published: pubs}
+
+	if err := firewall.Apply(enabled, rules, sets, opts); err != nil {
 		a.fwErr = err.Error()
 		a.fwNote = ""
 		log.Printf("firewall: %v", err)
@@ -263,22 +276,51 @@ func (a *agent) applyFirewall(enabled bool, rules []firewall.Rule, sets []firewa
 	}
 	a.fwErr = ""
 	a.fwNote = ""
+	a.fwEnabled, a.fwRules, a.fwSets = enabled, rules, sets
+	a.fwPubs = pubsKey(pubs)
 	if enabled {
-		st := firewall.Summarize(rules, sets, firewall.Options{Forward: a.fwForward})
-		log.Printf("firewall applied (%d accept(s), %d forward drop(s), forward=%v)", st.Accepts, st.ForwardDrops, a.fwForward)
-		if a.fwForward && st.ForwardDrops == 0 && len(rules) > 0 {
-			log.Printf("firewall: 没有生成 forward 规则（规则端口/来源为 any），Docker 发布端口不受约束")
+		st := firewall.Summarize(rules, sets, opts)
+		log.Printf("firewall applied (%d accept(s), %d forward drop(s), forward=%v, published=%s)",
+			st.Accepts, st.ForwardDrops, a.fwForward, pubsLabel(pubs))
+		if pubsErr != nil {
+			// We could not enumerate the published ports, so they are not managed
+			// at all: say so instead of reporting a clean status.
+			a.fwNote = "无法读取 Docker 发布端口（" + pubsErr.Error() + "）：容器端口不受本防火墙约束"
+			log.Printf("firewall: %s", a.fwNote)
 		}
 		if !a.fwForward {
 			// Without the forward chain, DNAT'ed (Docker-published) ports are not
 			// covered — say so instead of reporting a clean status.
-			if pubs := firewall.DockerPublished(); len(pubs) > 0 {
-				a.fwNote = "检测到 Docker 发布端口（" + strings.Join(pubs, ", ") +
+			if len(pubs) > 0 {
+				a.fwNote = "检测到 Docker 发布端口（" + pubsLabel(pubs) +
 					"）：forward 处理已关闭（FIREWALL_FORWARD=0），这些端口不受本防火墙约束"
 				log.Printf("firewall: %s", a.fwNote)
 			}
 		}
 	}
+}
+
+// pubsKey fingerprints a published-port list ("" when empty).
+func pubsKey(pubs []firewall.Endpoint) string {
+	parts := make([]string, 0, len(pubs))
+	for _, p := range pubs {
+		parts = append(parts, p.Port+"/"+p.Proto)
+	}
+	sort.Strings(parts)
+	return strings.Join(parts, ",")
+}
+
+// pubsLabel renders a published-port list for logs/notes.
+func pubsLabel(pubs []firewall.Endpoint) string {
+	if len(pubs) == 0 {
+		return "none"
+	}
+	parts := make([]string, 0, len(pubs))
+	for _, p := range pubs {
+		parts = append(parts, p.Port+"/"+p.Proto)
+	}
+	sort.Strings(parts)
+	return strings.Join(parts, ", ")
 }
 
 // splitTokens splits a rule source into its space/comma separated tokens.
@@ -369,8 +411,17 @@ func writeFileAtomic(path string, data []byte, mode os.FileMode) error {
 	return os.Rename(tmpName, path)
 }
 
-// report sends HAProxy status + per-site cert expiries to the panel.
+// report sends HAProxy status + per-site cert expiries to the panel. It also
+// re-applies the firewall when the set of locally published Docker ports changed,
+// so a container started after the last sync is covered without a revision bump.
 func (a *agent) report(ctx context.Context) {
+	if a.fwEnabled && a.fwForward {
+		if pubs, err := firewall.DockerPublished(); err == nil && pubsKey(pubs) != a.fwPubs {
+			log.Printf("firewall: published ports changed (%s), re-applying", pubsLabel(pubs))
+			a.applyFirewall(a.fwEnabled, a.fwRules, a.fwSets)
+		}
+	}
+
 	rctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
 
