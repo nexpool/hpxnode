@@ -1,7 +1,7 @@
 # hpxnode
 
-**hproxy** 的节点代理。运行在每台 HAProxy 服务器上，通过 gRPC 连接
-[hproxy](https://github.com/nexpool/hproxy) 面板，拉取本节点的站点，
+**hzproxy** 的节点代理。运行在每台 HAProxy 服务器上，通过 gRPC 连接
+[hzproxy](https://github.com/nexpool/hzproxy) 面板，拉取本节点的站点，
 本地生成 `haproxy.cfg`、用 acme.sh 签发/续期 Let's Encrypt 证书、reload，并上报状态。
 
 ```
@@ -21,7 +21,7 @@
 
 ```bash
 sudo bash <(curl -fsSL https://raw.githubusercontent.com/nexpool/hpxnode/main/scripts/install.sh) \
-  --panel 面板IP:9090 --id <节点ID> --secret <密钥>
+  --panel 面板IP:9099 --id <节点ID> --secret <密钥>
 ```
 
 安装脚本会装 HAProxy 3.x（Ubuntu 走官方 PPA）+ acme.sh + 本代理（systemd 服务 `hpxnode`）。
@@ -37,9 +37,9 @@ make proto          # 改了 proto/node.proto 才需要(需 protoc)
 ## 直接运行
 
 ```bash
-PANEL_GRPC=面板IP:9090 NODE_ID=1 NODE_SECRET=xxx ./hpxnode
+PANEL_GRPC=面板IP:9099 NODE_ID=1 NODE_SECRET=xxx ./hpxnode
 # 或
-./hpxnode --panel 面板IP:9090 --id 1 --secret xxx
+./hpxnode --panel 面板IP:9099 --id 1 --secret xxx
 ```
 
 ## 配置（flag 或环境变量）
@@ -56,6 +56,7 @@ PANEL_GRPC=面板IP:9090 NODE_ID=1 NODE_SECRET=xxx ./hpxnode
 | `ACME_HTTP_PORT` | | `8080` | acme.sh standalone 本地端口 |
 | `HEARTBEAT_SECONDS` | | `10` | 心跳间隔 |
 | `STATUS_SECONDS` | | `30` | 状态上报间隔 |
+| `FIREWALL_FORWARD` | | `1` | 防火墙规则是否也约束**转发**流量（Docker 发布端口经 DNAT 走 forward 链，input 链看不到）。`0` = 只管 input，Docker 端口不受规则约束 |
 
 ## 管理命令
 
@@ -81,7 +82,7 @@ scripts/install.sh   一键安装
 ## gRPC 协议
 
 心跳/同步/上报三个 RPC 的完整说明、`node.proto` 生成命令、服务端/客户端实现、鉴权与排错，
-见面板仓库的 [docs/grpc.md](https://github.com/nexpool/hproxy/blob/main/docs/grpc.md)。
+见面板仓库的 [docs/grpc.md](https://github.com/nexpool/hzproxy/blob/main/docs/grpc.md)。
 
 `node.proto` 与面板那份**除 `go_package` 外必须字节一致**，改协议时两边同步改、各自 `make proto`。
 

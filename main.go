@@ -4,13 +4,15 @@
 // certificates with acme.sh, and reports runtime status back.
 //
 // Config is via flags or env:
-//   PANEL_GRPC   panel gRPC address (host:port), e.g. panel.example.com:9090
+//   PANEL_GRPC   panel gRPC address (host:port), e.g. panel.example.com:9099
 //   NODE_ID      numeric node id from the panel
 //   NODE_SECRET  node secret from the panel
 //   HAPROXY_CFG  /etc/haproxy/haproxy.cfg
 //   CERT_DIR     /etc/haproxy/certs
 //   ACME_HTTP_PORT 8080
 //   RELOAD_CMD   "systemctl reload haproxy"
+//   FIREWALL_FORWARD  1 (default) also filters forwarded traffic, so firewall
+//                     rules cover Docker-published (DNAT'ed) ports; 0 = input only
 package main
 
 import (
@@ -62,6 +64,8 @@ type agent struct {
 	revision  uint64
 	lastSites []models.Site
 	fwErr     string            // last firewall apply error ("" = ok)
+	fwNote    string            // non-fatal firewall note (e.g. Docker-published ports)
+	fwForward bool              // also enforce the rules on forwarded (DNAT/Docker) traffic
 	reported  map[string]string // domain -> last-uploaded cert PEM (leader)
 }
 
@@ -93,7 +97,14 @@ func main() {
 	}
 	defer conn.Close()
 
-	a := &agent{cli: pb.NewNodeServiceClient(conn), hp: hp, ac: ac, certDir: certDir, reported: map[string]string{}}
+	a := &agent{
+		cli:       pb.NewNodeServiceClient(conn),
+		hp:        hp,
+		ac:        ac,
+		certDir:   certDir,
+		reported:  map[string]string{},
+		fwForward: env("FIREWALL_FORWARD", "1") != "0",
+	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -169,17 +180,18 @@ func (a *agent) sync(ctx context.Context) {
 	// before rendering, so the :443 bind can load them immediately.
 	a.installFollowerCerts(sites)
 
-	if err := a.hp.Apply(sites); err != nil {
-		log.Printf("apply config: %v", err)
-		return
+	// HAProxy and the inbound firewall are independent: a broken haproxy.cfg
+	// must never stop the firewall from being applied (that combination used to
+	// report "firewall ok" while the node had no table at all).
+	hpErr := a.hp.Apply(sites)
+	if hpErr != nil {
+		log.Printf("apply config: %v", hpErr)
+	} else {
+		log.Printf("synced revision %d (%d site(s))", reply.GetConfigRevision(), len(sites))
 	}
-	a.revision = reply.GetConfigRevision()
-	a.revKnown = true
-	a.lastSites = sites
-	log.Printf("synced revision %d (%d site(s))", a.revision, len(sites))
 
-	// Apply the node's inbound firewall (independent of HAProxy). A nil firewall
-	// (old panel) means "not managed" -> Apply removes our table if present.
+	// Apply the node's inbound firewall. A nil firewall (old panel) means "not
+	// managed" -> Apply removes our table if present.
 	fw := reply.GetFirewall()
 	var fwRules []firewall.Rule
 	for _, r := range fw.GetRules() {
@@ -189,14 +201,16 @@ func (a *agent) sync(ctx context.Context) {
 	for _, s := range fw.GetIpsets() {
 		fwSets = append(fwSets, firewall.IPSet{Name: s.GetName(), CIDRs: s.GetCidrs()})
 	}
-	if err := firewall.Apply(fw.GetEnabled(), fwRules, fwSets); err != nil {
-		a.fwErr = err.Error()
-		log.Printf("firewall: %v", err)
-	} else {
-		a.fwErr = ""
-		if fw.GetEnabled() {
-			log.Printf("firewall applied (%d rule(s))", len(fwRules))
-		}
+	a.applyFirewall(fw.GetEnabled(), fwRules, fwSets)
+
+	// Remember the desired sites (also used for cert reporting) even when the
+	// haproxy apply failed.
+	a.lastSites = sites
+	// Only mark the revision as applied once HAProxy accepted the config, so a
+	// failed apply is retried on the next heartbeat.
+	if hpErr == nil {
+		a.revision = reply.GetConfigRevision()
+		a.revKnown = true
 	}
 
 	// Issue certificates for sites that don't have one yet. Group followers never
@@ -221,6 +235,53 @@ func (a *agent) sync(ctx context.Context) {
 	// Upload any freshly-issued leader certs so the panel can distribute them.
 	a.pushCerts(ctx, sites)
 	a.report(ctx)
+}
+
+// applyFirewall applies the desired inbound firewall and records the outcome for
+// the status report. Rules whose referenced IP set was not sent by the panel
+// (deleted or disabled) are called out explicitly: they render no accept line,
+// so with the default-deny policy that port stays closed.
+func (a *agent) applyFirewall(enabled bool, rules []firewall.Rule, sets []firewall.IPSet) {
+	known := make(map[string]bool, len(sets))
+	for _, s := range sets {
+		known[s.Name] = true
+	}
+	for _, r := range rules {
+		for _, tok := range splitTokens(r.Source) {
+			if strings.HasPrefix(tok, "@") && !known[strings.TrimPrefix(tok, "@")] {
+				log.Printf("firewall: 规则 %s/%s 引用的 IP 组 %s 未下发(已删除或被禁用)，该规则不放行任何来源",
+					r.Protocol, r.Port, tok)
+			}
+		}
+	}
+
+	if err := firewall.Apply(enabled, rules, sets, firewall.Options{Forward: a.fwForward}); err != nil {
+		a.fwErr = err.Error()
+		a.fwNote = ""
+		log.Printf("firewall: %v", err)
+		return
+	}
+	a.fwErr = ""
+	a.fwNote = ""
+	if enabled {
+		log.Printf("firewall applied (%d rule(s), forward=%v)", len(rules), a.fwForward)
+		if !a.fwForward {
+			// Without the forward chain, DNAT'ed (Docker-published) ports are not
+			// covered — say so instead of reporting a clean status.
+			if pubs := firewall.DockerPublished(); len(pubs) > 0 {
+				a.fwNote = "检测到 Docker 发布端口（" + strings.Join(pubs, ", ") +
+					"）：forward 处理已关闭（FIREWALL_FORWARD=0），这些端口不受本防火墙约束"
+				log.Printf("firewall: %s", a.fwNote)
+			}
+		}
+	}
+}
+
+// splitTokens splits a rule source into its space/comma separated tokens.
+func splitTokens(s string) []string {
+	return strings.FieldsFunc(s, func(r rune) bool {
+		return r == ' ' || r == ',' || r == '\t' || r == '\n'
+	})
 }
 
 // installFollowerCerts writes leader-issued certificates (distributed by the
@@ -321,7 +382,11 @@ func (a *agent) report(ctx context.Context) {
 	}
 
 	req.FirewallOk = a.fwErr == ""
-	req.FirewallErr = a.fwErr
+	if a.fwErr != "" {
+		req.FirewallErr = a.fwErr
+	} else {
+		req.FirewallErr = a.fwNote
+	}
 
 	for i := range a.lastSites {
 		primary := a.lastSites[i].Primary()

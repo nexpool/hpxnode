@@ -4,7 +4,7 @@
 # 的站点，本地生成 haproxy.cfg、签发/续期证书、reload，并上报状态。
 #
 # 用法(在面板「节点」页新建节点后会给出完整命令):
-#   sudo bash install-node.sh --panel <面板地址:9090> --id <节点ID> --secret <密钥>
+#   sudo bash install-node.sh --panel <面板地址:9099> --id <节点ID> --secret <密钥>
 #
 # 选项:
 #   --panel <host:port>  面板 gRPC 地址(必填)
@@ -139,6 +139,8 @@ RELOAD_CMD=systemctl reload haproxy
 ACME_HTTP_PORT=8080
 HEARTBEAT_SECONDS=10
 STATUS_SECONDS=30
+# 1 = 规则同时约束转发流量(Docker 发布端口)；0 = 只管 input 链
+FIREWALL_FORWARD=1
 EOF
 
 say "[5/6] systemd 服务 + 管理命令"
