@@ -56,6 +56,7 @@ PANEL_GRPC=面板IP:9099 NODE_ID=1 NODE_SECRET=xxx ./hpxnode
 | `ACME_HTTP_PORT`    |            | `8080`                     | acme.sh standalone 本地端口                                                                                                         |
 | `HEARTBEAT_SECONDS` |            | `10`                       | 心跳间隔                                                                                                                            |
 | `STATUS_SECONDS`    |            | `30`                       | 状态上报间隔                                                                                                                        |
+| `RENEW_CHECK_SECONDS` |          | `600`                      | 证书到期检查间隔；剩余天数低于 25 天时主动强制续期（acme.sh cron 失效时的兜底）                                                      |
 | `FIREWALL_FORWARD`  |            | `1`                        | 防火墙规则是否也约束**转发**流量（Docker 发布端口经 DNAT 走 forward 链，input 链看不到）。`0` = 只管 input，Docker 端口不受规则约束 |
 
 ## 管理命令

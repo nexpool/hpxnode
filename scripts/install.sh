@@ -139,6 +139,8 @@ RELOAD_CMD=systemctl reload haproxy
 ACME_HTTP_PORT=8080
 HEARTBEAT_SECONDS=10
 STATUS_SECONDS=30
+# 证书到期检查间隔(秒)；剩余 <25 天时主动强制续期，兜底 acme.sh cron
+RENEW_CHECK_SECONDS=600
 # 1 = 规则同时约束转发流量(Docker 发布端口)；0 = 只管 input 链
 FIREWALL_FORWARD=1
 EOF

@@ -2,3 +2,5 @@
 /hpxnode-*
 *.log
 proto/*
+/.gocache/
+/.gomodcache/

@@ -4,15 +4,15 @@
 // certificates with acme.sh, and reports runtime status back.
 //
 // Config is via flags or env:
-//   PANEL_GRPC   panel gRPC address (host:port), e.g. panel.example.com:9099
-//   NODE_ID      numeric node id from the panel
-//   NODE_SECRET  node secret from the panel
-//   HAPROXY_CFG  /etc/haproxy/haproxy.cfg
-//   CERT_DIR     /etc/haproxy/certs
-//   ACME_HTTP_PORT 8080
-//   RELOAD_CMD   "systemctl reload haproxy"
-//   FIREWALL_FORWARD  1 (default) also filters forwarded traffic, so firewall
-//                     rules cover Docker-published (DNAT'ed) ports; 0 = input only
+//
+//	PANEL_GRPC   panel gRPC address (host:port), e.g. panel.example.com:9099
+//	NODE_ID      numeric node id from the panel
+//	NODE_SECRET  node secret from the panel
+//	HAPROXY_CFG  /etc/haproxy/haproxy.cfg
+//	CERT_DIR     /etc/haproxy/certs
+//	ACME_HTTP_PORT 8080
+//	RELOAD_CMD   "systemctl reload haproxy"
+//	FIREWALL_FORWARD  1 (default) also filters forwarded traffic, so firewall
 package main
 
 import (
@@ -26,6 +26,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -69,6 +70,15 @@ type agent struct {
 	fwForward bool              // also enforce the rules on forwarded (DNAT/Docker) traffic
 	reported  map[string]string // domain -> last-uploaded cert PEM (leader)
 
+	// Certificate renewal self-healing. acme.sh's own cron is a single point of
+	// failure (it may never be installed, or its --home may point at a different
+	// acme.sh store), and a certificate that quietly expires takes the site down.
+	// The agent therefore also watches expiry and force-renews ahead of it.
+	mu         sync.Mutex
+	renewed    map[string]time.Time // primary -> last force-renew attempt
+	renewedAt  map[string]string    // primary -> cert NotAfter when we last tried
+	reloadSeen map[string]string    // primary -> PEM mtime HAProxy last picked up
+
 	// Last applied firewall state, so a change in the locally published Docker
 	// ports can be re-applied without waiting for a panel revision bump.
 	fwEnabled bool
@@ -106,12 +116,15 @@ func main() {
 	defer conn.Close()
 
 	a := &agent{
-		cli:       pb.NewNodeServiceClient(conn),
-		hp:        hp,
-		ac:        ac,
-		certDir:   certDir,
-		reported:  map[string]string{},
-		fwForward: env("FIREWALL_FORWARD", "1") != "0",
+		cli:        pb.NewNodeServiceClient(conn),
+		hp:         hp,
+		ac:         ac,
+		certDir:    certDir,
+		reported:   map[string]string{},
+		renewed:    map[string]time.Time{},
+		renewedAt:  map[string]string{},
+		reloadSeen: map[string]string{},
+		fwForward:  env("FIREWALL_FORWARD", "1") != "0",
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -119,15 +132,21 @@ func main() {
 
 	hbEvery := time.Duration(atoiDef(env("HEARTBEAT_SECONDS", "10"), 10)) * time.Second
 	statEvery := time.Duration(atoiDef(env("STATUS_SECONDS", "30"), 30)) * time.Second
+	renewEvery := time.Duration(atoiDef(env("RENEW_CHECK_SECONDS", "600"), 600)) * time.Second
 
 	log.Printf("hpxnode %s connected to %s (node %s)", version, *panelAddr, *nodeID)
 	a.heartbeat(ctx, true) // force an initial sync
 	a.report(ctx)
+	a.renewExpiring(ctx) // heal certs that lapsed while the agent was down
 
 	hb := time.NewTicker(hbEvery)
 	defer hb.Stop()
 	st := time.NewTicker(statEvery)
 	defer st.Stop()
+	// Certificate expiry is checked on its own slow ticker: renewals are network
+	// calls that can take up to a few minutes and must never stall heartbeats.
+	rn := time.NewTicker(renewEvery)
+	defer rn.Stop()
 	for {
 		select {
 		case <-ctx.Done():
@@ -137,6 +156,8 @@ func main() {
 			a.heartbeat(ctx, false)
 		case <-st.C:
 			a.report(ctx)
+		case <-rn.C:
+			a.renewExpiring(ctx)
 		}
 	}
 }
@@ -387,6 +408,107 @@ func (a *agent) pushCerts(ctx context.Context, sites []models.Site) {
 			continue
 		}
 		a.reported[primary] = pem
+	}
+}
+
+// renewExpiring force-renews this node's own certificates that are close to
+// expiry. acme.sh's cron is the primary renewal path, but it fails silently when
+// it is missing or misconfigured (a --home pointing at another acme.sh store finds
+// no certs and still exits 0), and an expired certificate takes the vhost down.
+// Anything within acme.ForceRenewDays of expiry is therefore re-issued here and
+// deployed through the verified path in acme.Client.Renew.
+//
+// Group followers are skipped: their certificate is issued by the group leader
+// and distributed by the panel.
+func (a *agent) renewExpiring(ctx context.Context) {
+	a.mu.Lock()
+	sites := append([]models.Site(nil), a.lastSites...)
+	a.mu.Unlock()
+	if len(sites) == 0 {
+		return // nothing synced yet
+	}
+
+	for i := range sites {
+		st := &sites[i]
+		if st.Follower() {
+			continue
+		}
+		primary := st.Primary()
+		if primary == "" {
+			continue
+		}
+		info := acme.CertInfo(a.certDir, primary)
+		if !info.Exists {
+			continue // sync() issues certificates that are missing entirely
+		}
+
+		// A renewal whose HAProxy reload failed leaves the file current while the
+		// running process still serves the old cert — the exact state the acme.sh
+		// deploy hook can leave behind when its reload fails. That is invisible in
+		// the expiry, so detect it from the file itself and reload.
+		a.reloadIfPending(primary)
+
+		if info.DaysLeft >= acme.ForceRenewDays {
+			continue
+		}
+
+		a.mu.Lock()
+		last, tried := a.renewed[primary]
+		stamp := a.renewedAt[primary]
+		a.mu.Unlock()
+		// Back off after a failed attempt until the certificate actually changes,
+		// so a CA-side error cannot turn into a request flood.
+		if tried && stamp == info.NotAfter && time.Since(last) < 6*time.Hour {
+			continue
+		}
+
+		log.Printf("cert %s: %d days left (< %d), force-renewing", primary, info.DaysLeft, acme.ForceRenewDays)
+		rctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
+		err := a.ac.Renew(rctx, st.DomainList())
+		cancel()
+
+		a.mu.Lock()
+		a.renewed[primary] = time.Now()
+		a.renewedAt[primary] = info.NotAfter
+		a.mu.Unlock()
+
+		if err != nil {
+			log.Printf("cert %s: 续期失败: %v", primary, err)
+			continue
+		}
+	}
+}
+
+// reloadIfPending reloads HAProxy when the deployed PEM looks newer than the last
+// state we know HAProxy picked up. A renewal writes the file and only then reloads,
+// so a failed reload leaves a fresh file with a stale process; comparing the file
+// modification time against the last successfully reloaded state catches that even
+// when the certificate itself is not expiring any more.
+func (a *agent) reloadIfPending(primary string) {
+	path := filepath.Join(a.certDir, primary+".pem")
+	fi, err := os.Stat(path)
+	if err != nil {
+		return
+	}
+	mtime := fi.ModTime().UTC().Format(time.RFC3339Nano)
+
+	a.mu.Lock()
+	seen := a.reloadSeen[primary]
+	a.mu.Unlock()
+	if seen == mtime {
+		return // already reloaded for this exact file
+	}
+
+	if err := a.ac.Reload(); err != nil {
+		log.Printf("cert %s: reload: %v", primary, err)
+		return // leave it pending and retry on the next check
+	}
+	a.mu.Lock()
+	a.reloadSeen[primary] = mtime
+	a.mu.Unlock()
+
+	if info := acme.CertInfo(a.certDir, primary); info.Exists {
+		log.Printf("cert %s: reloaded HAProxy (%d days left)", primary, info.DaysLeft)
 	}
 }
 
