@@ -137,7 +137,7 @@ func main() {
 	log.Printf("hpxnode %s connected to %s (node %s)", version, *panelAddr, *nodeID)
 	a.heartbeat(ctx, true) // force an initial sync
 	a.report(ctx)
-	a.renewExpiring(ctx) // heal certs that lapsed while the agent was down
+	// The cert check runs from sync() once the site list is known.
 
 	hb := time.NewTicker(hbEvery)
 	defer hb.Stop()
@@ -264,6 +264,14 @@ func (a *agent) sync(ctx context.Context) {
 	// Upload any freshly-issued leader certs so the panel can distribute them.
 	a.pushCerts(ctx, sites)
 	a.report(ctx)
+
+	// Check certificate expiry now that the site list is known. Doing this here,
+	// rather than only on the renew ticker, matters at startup: the agent often
+	// comes up while the panel is still unreachable, so the initial check sees no
+	// sites and the ticker is the first real chance to act — up to a full
+	// RENEW_CHECK_SECONDS later. Running it in the background keeps a slow
+	// issuance from stalling the heartbeat loop.
+	go a.renewExpiring(ctx)
 }
 
 // applyFirewall applies the desired inbound firewall and records the outcome for
@@ -439,7 +447,11 @@ func (a *agent) renewExpiring(ctx context.Context) {
 		}
 		info := acme.CertInfo(a.certDir, primary)
 		if !info.Exists {
-			continue // sync() issues certificates that are missing entirely
+			// sync() issues certificates that are missing entirely. Say so anyway:
+			// silently skipping is how a site ends up serving an expired cert with
+			// nothing in the log to explain it.
+			log.Printf("cert %s: 未找到 %s/%s.pem，等待 sync 补签", primary, a.certDir, primary)
+			continue
 		}
 
 		// A renewal whose HAProxy reload failed leaves the file current while the
