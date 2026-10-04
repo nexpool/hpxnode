@@ -69,6 +69,22 @@ hpxnode {start|stop|restart|status|log|config|update|uninstall}
 
 `hpxnode update` 会从 GitHub Release 拉取最新 `hpxnode-linux-<arch>`、原子替换二进制并重启服务。
 
+## 证书排查脚本
+
+`scripts/` 下有两个**只用于排查/抢修**的脚本，不参与正常运行（正常续期由 agent 兜底 + acme.sh cron 完成）：
+
+```bash
+# 体检：逐张检查证书，区分「没续成」和「只是没 reload」，查 cron/deploy hook 状态
+sudo bash scripts/diag-cert.sh
+
+# 抢修：强制重签所有已过期/即将过期的证书，校验后原子安装并 reload
+sudo bash scripts/fix-certs.sh --dry-run    # 先看要动哪些
+sudo bash scripts/fix-certs.sh
+```
+
+`diag-cert.sh` 会回答三个问题：磁盘上的证书过期没、HAProxy 实际发的是哪一张、acme.sh 的
+续期配置(cron / `--home` / deploy hook / 下次续期时间)齐不齐。排查「证书没自动续期」时先跑它。
+
 ## 目录
 
 ```
@@ -78,6 +94,8 @@ internal/haproxy/    生成/校验/reload haproxy.cfg
 internal/acme/       acme.sh 封装 + 证书到期解析
 internal/models/     Site / CertInfo
 scripts/install.sh   一键安装
+scripts/diag-cert.sh 证书体检(只读)
+scripts/fix-certs.sh 证书抢修(强制重签)
 ```
 
 ## gRPC 协议
