@@ -42,23 +42,23 @@ func TestRenderIPSetRule(t *testing.T) {
 	}
 }
 
-// A disabled managed firewall must only delete our tables, never leave rules on.
-func TestRenderDisabledRemovesTable(t *testing.T) {
-	script := removeScript()
-	if !strings.Contains(script, "destroy table inet hzproxy_fw") {
-		t.Fatalf("unexpected remove script: %v", script)
+// The clean-up set must contain the legacy name, or a rename leaves a second
+// default-deny input chain behind. Kept to pure data: removeScript() output
+// depends on which tables the host actually has.
+func TestLegacyTablesAreManaged(t *testing.T) {
+	if !contains(managedTableNames(), "inet hproxy_fw") {
+		t.Fatal("the pre-rename table name must be in the clean-up set")
+	}
+	if managedTableNames()[0] != tableName {
+		t.Fatalf("the current table must be cleaned up first, got %v", managedTableNames())
 	}
 }
 
-// A renamed table must not survive as a second default-deny input chain: the
-// panel would then show a rule that only one of the two chains carries.
-func TestRenderRemovesLegacyTables(t *testing.T) {
-	for _, name := range legacyTableNames {
-		for _, script := range []string{removeScript(), render(nil, nil, Options{})} {
-			if !strings.Contains(script, "destroy table "+name) {
-				t.Fatalf("legacy table %s not removed by:\n%s", name, script)
-			}
-		}
+// `destroy table` is a syntax error on older nftables, and the -c check failing
+// means the firewall silently stops being updated. Keep to `delete`.
+func TestNoDestroySyntax(t *testing.T) {
+	if strings.Contains(render(nil, nil, Options{}), "destroy table") {
+		t.Fatal("destroy needs a newer nftables than we can assume")
 	}
 }
 

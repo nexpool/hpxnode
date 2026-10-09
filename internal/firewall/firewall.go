@@ -207,17 +207,43 @@ func setDef(name, typ string, elems []string) string {
 	return b.String()
 }
 
+// managedTableNames is the current table followed by every legacy name.
+func managedTableNames() []string {
+	return append([]string{tableName}, legacyTableNames...)
+}
+
 // removeScript deletes the managed table plus every legacy table name, so a
-// rename cannot leave a second default-deny input chain behind. It uses
-// "destroy" rather than "delete" because nft aborts the whole script on a
-// missing table, and the legacy names are normally absent.
+// rename cannot leave a second default-deny input chain behind.
+//
+// Only tables that actually exist get a delete statement: nft aborts the whole
+// script on a missing table, and legacy names are normally absent. Existence is
+// probed with `nft list table`, which every nftables version understands.
+// The newer `destroy table` would be a one-liner here, but it is a syntax error
+// on older nftables, where it takes the firewall down with it: the -c check
+// fails, Apply returns an error, and the ruleset stops being updated at all.
 func removeScript() string {
 	var b strings.Builder
-	for _, name := range append([]string{tableName}, legacyTableNames...) {
+	for _, name := range managedTableNames() {
+		if !tableExists(name) {
+			continue
+		}
 		b.WriteString("table " + name + "\n")
-		b.WriteString("destroy table " + name + "\n")
+		b.WriteString("delete table " + name + "\n")
 	}
 	return b.String()
+}
+
+// tableExists reports whether the named table ("inet foo") is installed. A probe
+// that cannot run at all (nft missing, permissions) counts as absent, so the
+// caller skips the delete instead of emitting a statement that would abort the
+// whole nft transaction.
+func tableExists(name string) bool {
+	fields := strings.Fields(name)
+	if len(fields) != 2 {
+		return false
+	}
+	cmd := exec.Command("nft", "list", "table", fields[0], fields[1])
+	return cmd.Run() == nil
 }
 
 // portProto renders the "<proto> dport <port>" fragment (without the source).
