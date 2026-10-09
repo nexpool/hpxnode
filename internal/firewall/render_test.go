@@ -42,11 +42,23 @@ func TestRenderIPSetRule(t *testing.T) {
 	}
 }
 
-// A disabled managed firewall must only delete our table, never leave rules on.
+// A disabled managed firewall must only delete our tables, never leave rules on.
 func TestRenderDisabledRemovesTable(t *testing.T) {
 	script := removeScript()
-	if !strings.Contains(script, "delete table inet hzproxy_fw") {
+	if !strings.Contains(script, "destroy table inet hzproxy_fw") {
 		t.Fatalf("unexpected remove script: %v", script)
+	}
+}
+
+// A renamed table must not survive as a second default-deny input chain: the
+// panel would then show a rule that only one of the two chains carries.
+func TestRenderRemovesLegacyTables(t *testing.T) {
+	for _, name := range legacyTableNames {
+		for _, script := range []string{removeScript(), render(nil, nil, Options{})} {
+			if !strings.Contains(script, "destroy table "+name) {
+				t.Fatalf("legacy table %s not removed by:\n%s", name, script)
+			}
+		}
 	}
 }
 

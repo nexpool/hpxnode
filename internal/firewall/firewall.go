@@ -33,6 +33,16 @@ import (
 
 const tableName = "inet hzproxy_fw"
 
+// legacyTableNames are table names this agent (or its predecessors) managed in
+// the past. Apply only ever recreated its *current* table, so a rename left the
+// old one installed forever: two input chains with policy drop, and a rule added
+// through the panel landed in only one of them, which is invisible from the
+// panel and very hard to diagnose from the host. Every apply now removes the
+// legacy names too, so a rename cleans itself up on the next sync.
+var legacyTableNames = []string{
+	"inet hproxy_fw",
+}
+
 // Rule is one inbound allow rule. Source is "any", a CIDR/IP, or "@<ipset>".
 type Rule struct {
 	Port     string // "22", "8000-8010", or "any"
@@ -153,7 +163,7 @@ func render(rules []Rule, sets []IPSet, opts Options) string {
 
 	var b strings.Builder
 	b.WriteString("table " + tableName + "\n")
-	b.WriteString("delete table " + tableName + "\n")
+	b.WriteString(removeScript())
 	b.WriteString("table " + tableName + " {\n")
 	b.WriteString(setDefs.String())
 	b.WriteString("  chain input {\n")
@@ -197,8 +207,17 @@ func setDef(name, typ string, elems []string) string {
 	return b.String()
 }
 
+// removeScript deletes the managed table plus every legacy table name, so a
+// rename cannot leave a second default-deny input chain behind. It uses
+// "destroy" rather than "delete" because nft aborts the whole script on a
+// missing table, and the legacy names are normally absent.
 func removeScript() string {
-	return "table " + tableName + "\ndelete table " + tableName + "\n"
+	var b strings.Builder
+	for _, name := range append([]string{tableName}, legacyTableNames...) {
+		b.WriteString("table " + name + "\n")
+		b.WriteString("destroy table " + name + "\n")
+	}
+	return b.String()
 }
 
 // portProto renders the "<proto> dport <port>" fragment (without the source).
